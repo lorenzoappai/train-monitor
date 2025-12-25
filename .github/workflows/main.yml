@@ -46,6 +46,7 @@ jobs:
           DATA_ENDPOINT: ${{ secrets.DATA_ENDPOINT }}
           # Multi-station mode enabled by default for scheduled runs
           MULTI_STATION: ${{ (inputs.mode == 'multi' || github.event_name == 'schedule') && 'true' || 'false' }}
-          STATION_NAME: ${{ inputs.station || vars.STATION_NAME }}
-          TRAIN_PROVIDER: ${{ inputs.provider || vars.TRAIN_PROVIDER || 'swiss' }}
+          STATION_NAME: ${{ inputs.station }}
+          # For manual runs, use input provider. For scheduled runs, use vars.TRAIN_PROVIDER or default to swiss
+          TRAIN_PROVIDER: ${{ inputs.provider != '' && inputs.provider || vars.TRAIN_PROVIDER || 'swiss' }}
         run: python main.py

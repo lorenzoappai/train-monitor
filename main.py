@@ -77,12 +77,32 @@ class SwissTrainProvider(TrainProvider):
                     plat_planned = stop.get("platform")
                     plat_predicted = prognosis.get("platform")
                     
-                    # Status/Delays
-                    delay_min = stop.get("delay") # can be null
-                    if delay_min is None: delay_min = 0
+                    # Status/Delays - Check multiple sources
+                    delay_min = 0
+                    
+                    # Method 1: Get from prognosis if available
+                    prognosis_delay = prognosis.get("delay")
+                    if prognosis_delay is not None:
+                        delay_min = prognosis_delay
+                    # Method 2: Get from stop if available
+                    elif stop.get("delay") is not None:
+                        delay_min = stop.get("delay")
+                    # Method 3: Calculate from timestamp difference if both times exist
+                    elif dep_planned and dep_predicted and dep_predicted != dep_planned:
+                        try:
+                            from datetime import datetime as dt
+                            planned_dt = dt.fromisoformat(dep_planned.replace('Z', '+00:00'))
+                            predicted_dt = dt.fromisoformat(dep_predicted.replace('Z', '+00:00'))
+                            delay_seconds = (predicted_dt - planned_dt).total_seconds()
+                            delay_min = int(delay_seconds / 60)
+                        except:
+                            delay_min = 0
                     
                     status = "ON TIME"
                     if delay_min > 0: status = "DELAYED"
+                    elif delay_min < 0: 
+                        status = "EARLY"
+                        delay_min = abs(delay_min)  # Keep delay as positive value
                     if prognosis.get("status") == "cancelled": status = "CANCELLED"
 
                     row = {

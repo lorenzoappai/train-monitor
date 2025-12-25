@@ -1,0 +1,24 @@
+{
+    "swiss_stations": [
+        "Zurich HB",
+        "Geneva",
+        "Basel SBB",
+        "Bern",
+        "Lausanne",
+        "Lucerne",
+        "Lugano",
+        "St. Gallen"
+    ],
+    "italian_stations": [
+        "Milano Centrale",
+        "Roma Termini",
+        "Torino Porta Nuova",
+        "Firenze Santa Maria Novella",
+        "Venezia Santa Lucia",
+        "Bologna Centrale",
+        "Napoli Centrale",
+        "Verona Porta Nuova",
+        "Genova Piazza Principe",
+        "Bari Centrale"
+    ]
+}

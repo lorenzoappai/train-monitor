@@ -492,28 +492,68 @@ def main():
     # Provider selection
     provider_type = os.environ.get("TRAIN_PROVIDER", "swiss").lower()
     
-    # Handle empty string or None for STATION_NAME based on provider defaults?
+    # Check if user wants multi-station mode
+    multi_station_mode = os.environ.get("MULTI_STATION", "false").lower() == "true"
+    
+    # Single station from environment variable
     env_station = os.environ.get("STATION_NAME")
     
-    if provider_type == "italy":
-        station = env_station if env_station else "Roma Termini"
-        provider = ViaggiatrenoTrainProvider()
-        logger.info(f"Using Italian Train Provider (Viaggiatreno)")
-    else:
-        station = env_station if env_station else "Zurich HB"
-        provider = SwissTrainProvider()
-        logger.info(f"Using Swiss Train Provider (Opendata.ch)")
-
     logger.info("=== Train Monitor Started ===")
-    logger.info(f"Target Station: {station}")
     
     if not data_url:
         logger.warning("DATA_ENDPOINT is not set. Running in DRY RUN mode.")
     else:
         logger.info("DATA_ENDPOINT is configured.")
-
+    
+    # Determine stations to monitor
+    stations_to_monitor = []
+    
+    if multi_station_mode:
+        # Load stations from config file
+        try:
+            with open('stations.json', 'r') as f:
+                config = json.load(f)
+                if provider_type == "italy":
+                    stations_to_monitor = config.get("italian_stations", [])
+                    logger.info(f"Multi-station mode: Monitoring {len(stations_to_monitor)} Italian stations")
+                else:
+                    stations_to_monitor = config.get("swiss_stations", [])
+                    logger.info(f"Multi-station mode: Monitoring {len(stations_to_monitor)} Swiss stations")
+        except FileNotFoundError:
+            logger.error("stations.json not found. Falling back to single station mode.")
+            multi_station_mode = False
+        except json.JSONDecodeError as e:
+            logger.error(f"Error parsing stations.json: {e}. Falling back to single station mode.")
+            multi_station_mode = False
+    
+    # Single station mode (fallback or explicit)
+    if not multi_station_mode:
+        if provider_type == "italy":
+            station = env_station if env_station else "Roma Termini"
+        else:
+            station = env_station if env_station else "Zurich HB"
+        stations_to_monitor = [station]
+        logger.info(f"Single station mode: {station}")
+    
+    # Initialize provider
+    if provider_type == "italy":
+        provider = ViaggiatrenoTrainProvider()
+        logger.info(f"Using Italian Train Provider (Viaggiatreno)")
+    else:
+        provider = SwissTrainProvider()
+        logger.info(f"Using Swiss Train Provider (Opendata.ch)")
+    
+    # Monitor all stations
     monitor = TrainMonitor(data_url, provider)
-    monitor.run(station)
+    
+    for station in stations_to_monitor:
+        logger.info(f"Processing station: {station}")
+        try:
+            monitor.run(station)
+        except Exception as e:
+            logger.error(f"Error processing {station}: {e}")
+            continue
+    
     logger.info("=== Train Monitor Finished ===")
 
 if __name__ == "__main__":

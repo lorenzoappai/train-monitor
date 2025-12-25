@@ -3,6 +3,14 @@ name: Monitor Trains
 on:
   workflow_dispatch:
     inputs:
+      mode:
+        description: 'Monitoring Mode'
+        required: true
+        default: 'multi'
+        type: choice
+        options:
+        - multi
+        - single
       provider:
         description: 'Train Provider'
         required: true
@@ -12,8 +20,8 @@ on:
         - swiss
         - italy
       station:
-        description: 'Station Name'
-        required: true
+        description: 'Station Name (for single mode)'
+        required: false
         default: 'Zurich HB'
   schedule:
     - cron: '*/15 * * * *'
@@ -36,7 +44,8 @@ jobs:
       - name: Run Monitor
         env:
           DATA_ENDPOINT: ${{ secrets.DATA_ENDPOINT }}
-          # Use input if provided (manual trigger), otherwise use variable (scheduled)
+          # Multi-station mode enabled by default for scheduled runs
+          MULTI_STATION: ${{ (inputs.mode == 'multi' || github.event_name == 'schedule') && 'true' || 'false' }}
           STATION_NAME: ${{ inputs.station || vars.STATION_NAME }}
-          TRAIN_PROVIDER: ${{ inputs.provider || 'swiss' }}
+          TRAIN_PROVIDER: ${{ inputs.provider || vars.TRAIN_PROVIDER || 'swiss' }}
         run: python main.py

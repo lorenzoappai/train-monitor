@@ -85,10 +85,31 @@ class SwissTrainProvider(TrainProvider):
 
 class ViaggiatrenoTrainProvider(TrainProvider):
     # Unofficial API endpoints
-    BASE_URL = "https://www.viaggiatreno.it/infomobilita/resteasy/viaggiatreno"
+    # Use HTTP to avoid redirects that lose headers/method or cause 301->400 issues
+    BASE_URL = "http://www.viaggiatreno.it/infomobilita/resteasy/viaggiatreno"
 
     def __init__(self):
         self.session = self._create_retry_session()
+        self.time_offset_ms = 0
+        self._sync_time()
+
+    def _sync_time(self):
+        """Syncs local time with server time to handle potential skews"""
+        try:
+            # Head request to get server time
+            resp = self.session.head(self.BASE_URL, timeout=5)
+            server_date = resp.headers.get('Date')
+            if server_date:
+                # Parse HTTP Date format: "Thu, 25 Dec 2025 16:00:00 GMT"
+                server_dt = datetime.strptime(server_date, "%a, %d %b %Y %H:%M:%S %Z")
+                # Naive to local (UTC) comparison for offset
+                local_now = datetime.utcnow()
+                self.time_offset_ms = (server_dt - local_now).total_seconds() * 1000
+                logger.info(f"Time Sync: Local={local_now}, Server={server_dt}, Offset={self.time_offset_ms:.0f}ms")
+            else:
+                logger.warning("No Date header in response, skipping time sync.")
+        except Exception as e:
+            logger.warning(f"Time sync failed, using local time: {e}")
 
     def _create_retry_session(self, retries=3, backoff_factor=0.3):
         session = requests.Session()
@@ -107,13 +128,15 @@ class ViaggiatrenoTrainProvider(TrainProvider):
     def get_departures(self, station_name: str, limit: int = 10) -> List[Dict[str, Any]]:
         # 1. Get Station ID
         try:
-            station_id = self._get_station_id(station_name)
+            station_id, found_name = self._get_station_id(station_name)
             if not station_id:
                 logger.warning(f"Station not found: {station_name}")
                 return []
             
+            logger.info(f"Resolved '{station_name}' to '{found_name}' ({station_id})")
+            
             # 2. Get Departures List
-            raw_departures = self._fetch_departures_raw(station_id, station_name)
+            raw_departures = self._fetch_departures_raw(station_id, found_name)
             
             # 3. Enrich with details (this is the heavy part)
             detailed_departures = []
@@ -146,14 +169,16 @@ class ViaggiatrenoTrainProvider(TrainProvider):
             response.raise_for_status()
             data = response.json()
             if data and isinstance(data, list) and len(data) > 0:
-                return data[0].get('id')
+                # Return ID and Name
+                return data[0].get('id'), data[0].get('nomeLungo')
         except Exception as e:
             logger.error(f"Failed to lookup station ID for {station_name}: {e}")
-        return None
+        return None, None
 
     def _fetch_departures_raw(self, station_id: str, station_name: str) -> List[Dict[str, Any]]:
-        ts_ms = int(time.time() * 1000)
-        # Assuming current time for departures
+        # Apply offset to get server-compatible time
+        ts_ms = int((datetime.utcnow().timestamp() * 1000) + self.time_offset_ms)
+        
         url = f"{self.BASE_URL}/partenze/{station_id}/{ts_ms}"
         try:
             logger.info(f"Fetching departure board for {station_name} ({station_id})")

@@ -11,12 +11,14 @@ function doPost(e) {
     if (!sheet) {
       sheet = SpreadsheetApp.getActiveSpreadsheet().insertSheet("Train Logs");
       // Optional: Add headers if new sheet
+      // Updated schema with 28 columns
       sheet.appendRow([
-        "timestamp", "station", "name", "to", "category", "number", "operator", 
-        "departure_iso", "departure_planned", "departure_effective", 
-        "gate_planned", "gate_effective", "cancelled", 
-        "arrival_planned", "arrival_effective", "arrival_gate_planned", "arrival_gate_effective", 
-        "max_delay", "train_type"
+        "created_at", "station", "train_name", "destination", "category", "number", 
+        "operator", "partner_operator", "raw_departure_iso", "planned_departure", "predicted_departure", 
+        "delay_minutes", "delay", "status", "planned_platform", "predicted_platform", 
+        "planned_arrival", "predicted_arrival", "arrival_delay", "is_cancelled", 
+        "cancellation_reason", "train_speed", "journey_duration", "stops_count", 
+        "api_response_time", "record_id", "data_quality", "raw_json"
       ]);
     }
     
@@ -35,25 +37,34 @@ function doPost(e) {
     try {
       var rows = data.map(function(item) {
         return [
-          item.timestamp,
+          item.created_at,
           item.station,
-          item.name,
-          item.to,
+          item.train_name,
+          item.destination,
           item.category,
           item.number,
           item.operator,
-          item.departure_iso,
-          item.departure_planned || "",
-          item.departure_effective || "",
-          item.gate_planned || "",
-          item.gate_effective || "",
-          item.cancelled || false,
-          item.arrival_planned || "",
-          item.arrival_effective || "",
-          item.arrival_gate_planned || "",
-          item.arrival_gate_effective || "",
-          item.max_delay || 0,
-          item.train_type || ""
+          item.partner_operator || "",
+          item.raw_departure_iso,
+          item.planned_departure || "",
+          item.predicted_departure || "",
+          item.delay_minutes || 0,
+          item.delay || 0,
+          item.status || "",
+          item.planned_platform || "",
+          item.predicted_platform || "",
+          item.planned_arrival || "",
+          item.predicted_arrival || "",
+          item.arrival_delay || 0,
+          item.is_cancelled || false,
+          item.cancellation_reason || "",
+          item.train_speed || "",
+          item.journey_duration || "",
+          item.stops_count || 0,
+          item.api_response_time || 0,
+          item.record_id || "",
+          item.data_quality || 0,
+          item.raw_json || ""
         ];
       });
       

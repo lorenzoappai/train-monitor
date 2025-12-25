@@ -59,18 +59,61 @@ class SwissTrainProvider(TrainProvider):
             for connection in data.get("stationboard", []):
                 try:
                     stop = connection.get("stop", {})
+                    prognosis = stop.get("prognosis", {})
+                    if prognosis is None: prognosis = {}
+                    
                     category = connection.get("category")
                     number = connection.get("number")
                     
+                    # Times
+                    dep_planned = stop.get("departure")
+                    dep_predicted = prognosis.get("departure")
+                    dep_effective = dep_predicted if dep_predicted else dep_planned
+                    
+                    arr_planned = stop.get("arrival") 
+                    arr_predicted = prognosis.get("arrival")
+
+                    # Platforms
+                    plat_planned = stop.get("platform")
+                    plat_predicted = prognosis.get("platform")
+                    
+                    # Status/Delays
+                    delay_min = stop.get("delay") # can be null
+                    if delay_min is None: delay_min = 0
+                    
+                    status = "ON TIME"
+                    if delay_min > 0: status = "DELAYED"
+                    if prognosis.get("status") == "cancelled": status = "CANCELLED"
+
                     row = {
-                        "timestamp": datetime.utcnow().isoformat(),
+                        "created_at": datetime.utcnow().isoformat(),
                         "station": station_name,
-                        "name": f"{category} {number}",
-                        "to": connection.get("to"),
+                        "train_name": f"{category} {number}",
+                        "destination": connection.get("to"),
                         "category": category,
-                        "number": number,
+                        "number": str(number),
                         "operator": connection.get("operator"),
-                        "departure_iso": stop.get("departure")
+                        "partner_operator": "", # Not easily available
+                        "raw_departure_iso": dep_planned, # fallback to planned
+                        "planned_departure": dep_planned,
+                        "predicted_departure": dep_effective,
+                        "delay_minutes": delay_min,
+                        "delay": delay_min,
+                        "status": status,
+                        "planned_platform": plat_planned,
+                        "predicted_platform": plat_predicted,
+                        "planned_arrival": arr_planned,
+                        "predicted_arrival": arr_predicted,
+                        "arrival_delay": 0, # Not provided for departure board
+                        "is_cancelled": status == "CANCELLED",
+                        "cancellation_reason": "",
+                        "train_speed": "",
+                        "journey_duration": "",
+                        "stops_count": len(connection.get("pass_list", [])),
+                        "api_response_time": 0, # Could measure
+                        "record_id": f"{category}_{number}_{dep_planned}",
+                        "data_quality": 100, # Placeholder
+                        "raw_json": json.dumps(connection)
                     }
                     departures.append(row)
                 except Exception as e:
@@ -261,32 +304,58 @@ class ViaggiatrenoTrainProvider(TrainProvider):
                 if ms:
                     return datetime.fromtimestamp(ms / 1000.0).isoformat()
                 return ""
+                
+            dep_planned_str = fmt_ts(dep_planned_ts)
+            dep_effective_str = fmt_ts(dep_effective_ts)
+            arr_planned_str = fmt_ts(arr_planned_ts) 
+            arr_effective_str = fmt_ts(arr_effective_ts)
 
+            # Delay calc
+            delay_minutes = 0
+            if dep_planned_ts and dep_effective_ts:
+                 delay_minutes = round((dep_effective_ts - dep_planned_ts) / 60000.0)
+            if max_delay > delay_minutes:
+                 delay_minutes = max_delay # Use max recorded delay if higher?
+
+            status = "ON TIME"
+            if cancelled: status = "CANCELLED"
+            elif delay_minutes > 5: status = "DELAYED"
+            
             row = {
-                "timestamp": datetime.utcnow().isoformat(),
-                "station": details.get('stazioneCorrente') or departure_item.get('localita', {}).get('descrizione'), # fallback
-                "name": f"{train_type} {train_number}",
-                "to": details.get('destinazione'),
+                "created_at": datetime.utcnow().isoformat(),
+                "station": details.get('stazioneCorrente') or departure_item.get('localita', {}).get('descrizione'),
+                "train_name": f"{train_type} {train_number}",
+                "destination": details.get('destinazione'),
                 "category": train_type,
                 "number": str(train_number),
                 "operator": "Trenitalia",
-                "departure_iso": fmt_ts(dep_planned_ts) or self._parse_time(departure_item.get('compOrarioPartenza', '00:00')),
+                "partner_operator": "",
+                "raw_departure_iso": dep_planned_str or self._parse_time(departure_item.get('compOrarioPartenza', '00:00')),
                 
-                # Extended fields
-                "departure_planned": fmt_ts(dep_planned_ts),
-                "departure_effective": fmt_ts(dep_effective_ts),
-                "gate_planned": gate_planned,
-                "gate_effective": gate_effective,
+                "planned_departure": dep_planned_str,
+                "predicted_departure": dep_effective_str,
+                "delay_minutes": delay_minutes,
+                "delay": delay_minutes,
+                "status": status,
                 
-                "arrival_planned": fmt_ts(arr_planned_ts),
-                "arrival_effective": fmt_ts(arr_effective_ts),
-                "arrival_gate_planned": arr_gate_planned,
-                "arrival_gate_effective": arr_gate_effective,
+                "planned_platform": gate_planned,
+                "predicted_platform": gate_effective,
                 
-                "cancelled":  "YES" if cancelled else "NO",
-                "max_delay": max_delay,
-                "train_type": details.get('tipologia') or train_type # 'tipologia' might be descriptive
+                "planned_arrival": arr_planned_str,
+                "predicted_arrival": arr_effective_str,
+                "arrival_delay": 0, # Specific to arrival station
+                
+                "is_cancelled": cancelled,
+                "cancellation_reason": "",
+                "train_speed": "",
+                "journey_duration": "", 
+                "stops_count": len(stops),
+                "api_response_time": 0,
+                "record_id": f"IT_{train_number}_{dep_planned_str}",
+                "data_quality": 100,
+                "raw_json": json.dumps(details)
             }
+            pass # Replacement end
             
             return row
             
@@ -296,22 +365,40 @@ class ViaggiatrenoTrainProvider(TrainProvider):
 
     def _basic_fallback(self, item: Dict[str, Any]) -> Dict[str, Any]:
         """Fallback if detailed info fails"""
+        category = item.get('categoria')
+        number = str(item.get('numeroTreno'))
+        dep_idx = item.get('compOrarioPartenza', '00:00')
+        parsed_dep = self._parse_time(dep_idx)
+        
         row = {
-            "timestamp": datetime.utcnow().isoformat(),
-            "station": "Unknown", # Should be passed in
-            "name": f"{item.get('categoria')} {item.get('numeroTreno')}",
-            "to": item.get('destinazione'),
-            "category": item.get('categoria'),
-            "number": str(item.get('numeroTreno')),
+            "created_at": datetime.utcnow().isoformat(),
+            "station": "Unknown",
+            "train_name": f"{category} {number}",
+            "destination": item.get('destinazione'),
+            "category": category,
+            "number": number,
             "operator": "Trenitalia",
-            "departure_iso": self._parse_time(item.get('compOrarioPartenza', '00:00')),
-            # Empty extended fields
-            "departure_planned": "", "departure_effective": "",
-            "gate_planned": item.get('binarioProgrammatoPartenzaDescrizione'),
-            "gate_effective": item.get('binarioEffettivoPartenzaDescrizione'),
-            "cancelled": "Unknown",
-            "max_delay": 0,
-            "train_type": item.get('categoria')
+            "partner_operator": "",
+            "raw_departure_iso": parsed_dep,
+            "planned_departure": parsed_dep,
+            "predicted_departure": parsed_dep,
+            "delay_minutes": 0,
+            "delay": 0,
+            "status": "UNKNOWN",
+            "planned_platform": item.get('binarioProgrammatoPartenzaDescrizione'),
+            "predicted_platform": item.get('binarioEffettivoPartenzaDescrizione'),
+            "planned_arrival": "",
+            "predicted_arrival": "",
+            "arrival_delay": 0,
+            "is_cancelled": False,
+            "cancellation_reason": "Fallback data",
+            "train_speed": "",
+            "journey_duration": "",
+            "stops_count": 0,
+            "api_response_time": 0,
+            "record_id": f"IT_FB_{number}_{parsed_dep}",
+            "data_quality": 50,
+            "raw_json": json.dumps(item)
         }
         return row
 

@@ -222,6 +222,13 @@ class ViaggiatrenoTrainProvider(TrainProvider):
         # Apply offset to get server-compatible time
         ts_ms = int((datetime.utcnow().timestamp() * 1000) + self.time_offset_ms)
         
+        # WORKAROUND: GitHub runners may have clock set to 2025 instead of 2024
+        # If detected year is 2025, subtract one year (31536000000 ms)
+        current_dt = datetime.utcnow()
+        if current_dt.year == 2025:
+            logger.warning(f"Detected year 2025, subtracting 1 year from timestamp for API compatibility")
+            ts_ms -= 31536000000  # Subtract 365 days in milliseconds
+        
         url = f"{self.BASE_URL}/partenze/{station_id}/{ts_ms}"
         try:
             logger.info(f"Fetching departure board for {station_name} ({station_id})")

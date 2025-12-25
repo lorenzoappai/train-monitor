@@ -1,0 +1,42 @@
+name: Monitor Trains
+
+on:
+  workflow_dispatch:
+    inputs:
+      provider:
+        description: 'Train Provider'
+        required: true
+        default: 'swiss'
+        type: choice
+        options:
+        - swiss
+        - italy
+      station:
+        description: 'Station Name'
+        required: true
+        default: 'Zurich HB'
+  schedule:
+    - cron: '*/15 * * * *'
+
+jobs:
+  run-monitor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+          
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          
+      - name: Run Monitor
+        env:
+          DATA_ENDPOINT: ${{ secrets.DATA_ENDPOINT }}
+          # Use input if provided (manual trigger), otherwise use variable (scheduled)
+          STATION_NAME: ${{ inputs.station || vars.STATION_NAME }}
+          TRAIN_PROVIDER: ${{ inputs.provider || 'swiss' }}
+        run: python main.py

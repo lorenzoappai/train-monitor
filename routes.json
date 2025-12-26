@@ -1,0 +1,62 @@
+{
+    "swiss_routes": [
+        {
+            "from": "Zurich HB",
+            "to": "Bern"
+        },
+        {
+            "from": "Zurich HB",
+            "to": "Geneva"
+        },
+        {
+            "from": "Zurich HB",
+            "to": "Basel SBB"
+        },
+        {
+            "from": "Basel SBB",
+            "to": "Zurich HB"
+        },
+        {
+            "from": "Bern",
+            "to": "Zurich HB"
+        },
+        {
+            "from": "Lucerne",
+            "to": "Zurich HB"
+        },
+        {
+            "from": "Geneva",
+            "to": "Zurich HB"
+        },
+        {
+            "from": "Lausanne",
+            "to": "Geneva"
+        },
+        {
+            "from": "Bern",
+            "to": "Geneva"
+        }
+    ],
+    "italian_routes": [
+        {
+            "from": "Milano Centrale",
+            "to": "Roma Termini"
+        },
+        {
+            "from": "Roma Termini",
+            "to": "Milano Centrale"
+        },
+        {
+            "from": "Roma Termini",
+            "to": "Napoli Centrale"
+        },
+        {
+            "from": "Milano Centrale",
+            "to": "Venezia Santa Lucia"
+        },
+        {
+            "from": "Torino Porta Nuova",
+            "to": "Milano Centrale"
+        }
+    ]
+}

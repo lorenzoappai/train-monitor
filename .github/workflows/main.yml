@@ -44,7 +44,9 @@ jobs:
       - name: Run Monitor
         env:
           DATA_ENDPOINT: ${{ secrets.DATA_ENDPOINT }}
-          # Multi-station mode enabled by default for scheduled runs
+          # NEW: Route-based monitoring (enabled by default)
+          ROUTE_MODE: 'true'
+          # Legacy: Multi-station mode (for backward compatibility)
           MULTI_STATION: ${{ (inputs.mode == 'multi' || github.event_name == 'schedule') && 'true' || 'false' }}
           STATION_NAME: ${{ inputs.station }}
           # For manual runs, use input provider. For scheduled runs, use vars.TRAIN_PROVIDER or default to swiss

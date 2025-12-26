@@ -20,7 +20,208 @@ logger = logging.getLogger(__name__)
 class TrainProvider(ABC):
     @abstractmethod
     def get_departures(self, station_name: str, limit: int = 10) -> List[Dict[str, Any]]:
+        """Legacy method for station-based monitoring"""
         pass
+    
+    @abstractmethod
+    def get_connections(self, origin: str, destination: str, limit: int = 10) -> List[Dict[str, Any]]:
+        """New method for route-based monitoring"""
+        pass
+
+class SwissConnectionsProvider(TrainProvider):
+    """Provider for end-to-end journey tracking using /connections API"""
+    BASE_URL = "https://transport.opendata.ch/v1"
+
+    def __init__(self):
+        self.session = self._create_retry_session()
+
+    def _create_retry_session(self, retries=3, backoff_factor=0.3):
+        session = requests.Session()
+        retry = Retry(
+            total=retries,
+            read=retries,
+            connect=retries,
+            backoff_factor=backoff_factor,
+            status_forcelist=(500, 502, 504),
+        )
+        adapter = HTTPAdapter(max_retries=retry)
+        session.mount('http://', adapter)
+        session.mount('https://', adapter)
+        return session
+
+    def get_departures(self, station_name: str, limit: int = 10) -> List[Dict[str, Any]]:
+        """Not used for connections-based monitoring"""
+        return []
+    
+    def get_connections(self, origin: str, destination: str, limit: int = 4) -> List[Dict[str, Any]]:
+        """Fetch end-to-end connections with departure and arrival delays"""
+        url = f"{self.BASE_URL}/connections"
+        params = {
+            'from': origin,
+            'to': destination,
+            'limit': limit
+        }
+        
+        try:
+            logger.info(f"Fetching connections: {origin} -> {destination}")
+            response = self.session.get(url, params=params, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+            
+            connections_list = []
+            for conn in data.get("connections", []):
+                try:
+                    # Extract departure info (at origin)
+                    dep_section = conn.get("from", {})
+                    dep_planned = dep_section.get("departure")
+                    dep_platform = dep_section.get("platform")
+                    
+                    # Extract arrival info (at destination) 
+                    arr_section = conn.get("to", {})
+                    arr_planned = arr_section.get("arrival")
+                    arr_platform = arr_section.get("platform")
+                    
+                    # Extract ACTUAL times from sections (more reliable)
+                    dep_actual = None
+                    arr_actual = None
+                    train_category = None
+                    train_number = None
+                    train_operator = None
+                    
+                    sections = conn.get("sections", [])
+                    for section in sections:
+                        journey = section.get("journey", {})
+                        if journey:
+                            # Get train details
+                            train_category = journey.get("category")
+                            train_number = journey.get("number")
+                            train_operator = journey.get("operator")
+                            
+                            # Get actual departure time from section departure
+                            section_dep = section.get("departure", {})
+                            if section_dep and section_dep.get("prognosis"):
+                                dep_actual = section_dep.get("prognosis", {}).get("departure")
+                            
+                            # Get actual arrival time from section arrival
+                            section_arr = section.get("arrival", {})
+                            if section_arr and section_arr.get("prognosis"):
+                                arr_actual = section_arr.get("prognosis", {}).get("arrival")
+                            
+                            if train_category:
+                                break
+                    
+                    # Fallback to planned times if actual not available
+                    if not dep_actual:
+                        dep_actual = dep_planned
+                    if not arr_actual:
+                        arr_actual = arr_planned
+                    
+                    # Calculate delays as (actual - planned)
+                    dep_delay = 0
+                    if dep_planned and dep_actual:
+                        try:
+                            from datetime import datetime as dt
+                            planned_dt = dt.fromisoformat(dep_planned.replace('Z', '+00:00'))
+                            actual_dt = dt.fromisoformat(dep_actual.replace('Z', '+00:00'))
+                            dep_delay = int((actual_dt - planned_dt).total_seconds() / 60)
+                        except:
+                            pass
+                    
+                    arr_delay = 0
+                    if arr_planned and arr_actual:
+                        try:
+                            from datetime import datetime as dt
+                            planned_dt = dt.fromisoformat(arr_planned.replace('Z', '+00:00'))
+                            actual_dt = dt.fromisoformat(arr_actual.replace('Z', '+00:00'))
+                            arr_delay = int((actual_dt - planned_dt).total_seconds() / 60)
+                        except:
+                            pass
+                    
+                    # Journey duration
+                    duration = conn.get("duration")
+                    duration_min = int(duration.split(":")[1]) if duration and ":" in duration else 0
+                    
+                    # Status determination
+                    dep_status = "ON TIME"
+                    if dep_delay > 0: dep_status = "DELAYED"
+                    elif dep_delay < 0: dep_status = "EARLY"
+                    
+                    arr_status = "ON TIME"
+                    if arr_delay > 0: arr_status = "DELAYED"
+                    elif arr_delay < 0: arr_status = "EARLY"
+                    
+                    # Journey ID for deduplication
+                    journey_date = dep_planned[:10] if dep_planned else datetime.utcnow().strftime("%Y-%m-%d")
+                    journey_id = f"{train_category}{train_number}_{journey_date}_{origin}_{destination}".replace(" ", "")
+                    
+                    row = {
+                        "created_at": datetime.utcnow().isoformat(),
+                        "origin_station": origin,
+                        "destination_station": destination,
+                        "train_name": f"{train_category} {train_number}" if train_category else "UNKNOWN",
+                        "category": train_category or "",
+                        "number": str(train_number) if train_number else "",
+                        "operator": train_operator or "",
+                        "partner_operator": "",
+                        
+                        # Departure (at origin)
+                        "planned_departure": dep_planned,
+                        "predicted_departure": dep_actual,
+                        "departure_delay": abs(dep_delay) if dep_delay else 0,
+                        "departure_status": dep_status,
+                        "planned_platform": dep_platform,
+                        "predicted_platform": arr_platform,  # FIXED: Use arrival platform for predicted_platform
+                        
+                        # Arrival (at destination)
+                        "planned_arrival": arr_planned,
+                        "predicted_arrival": arr_actual,
+                        "arrival_delay": abs(arr_delay) if arr_delay else 0,
+                        "arrival_status": arr_status,
+                        
+                        # Legacy fields for compatibility
+                        "station": origin,  # For compatibility
+                        "destination": destination,
+                        "raw_departure_iso": dep_planned,
+                        "delay_minutes": abs(dep_delay) if dep_delay else 0,
+                        "delay": abs(dep_delay) if dep_delay else 0,
+                        "status": dep_status,
+                        "status_arrival": arr_status,
+                        
+                        # Journey metadata
+                        "journey_duration": duration_min,
+                        "stops_count": len(sections),
+                        "is_cancelled": False,  # TODO: detect cancellations
+                        "cancellation_reason": "",
+                        "train_speed": "",
+                        "api_response_time": 0,
+                        "journey_id": journey_id,
+                        "record_id": f"{train_category}_{train_number}_{origin}_{destination}_{dep_planned}",
+                        "data_quality": 100,
+                        "board_type": "CONNECTION",
+                        "raw_json": json.dumps(conn)
+                    }
+                    connections_list.append(row)
+                    
+                except Exception as e:
+                    logger.warning(f"Skipping malformed connection: {e}")
+                    continue
+            
+            return connections_list
+            
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Failed to fetch connections from Swiss API: {e}")
+            return []
+    
+    def _add_delay(self, time_str: str, delay_minutes: int) -> str:
+        """Add delay to ISO timestamp"""
+        try:
+            from datetime import datetime as dt, timedelta
+            dt_obj = dt.fromisoformat(time_str.replace('Z', '+00:00'))
+            dt_obj += timedelta(minutes=delay_minutes)
+            return dt_obj.isoformat()
+        except:
+            return time_str
+
 
 class SwissTrainProvider(TrainProvider):
     BASE_URL = "https://transport.opendata.ch/v1"
@@ -69,73 +270,75 @@ class SwissTrainProvider(TrainProvider):
                     category = connection.get("category")
                     number = connection.get("number")
                     
-                    # Times
+                    # Times (Primary extraction)
                     dep_planned = stop.get("departure")
                     dep_predicted = prognosis.get("departure")
-                    dep_effective = dep_predicted if dep_predicted else dep_planned
                     
                     arr_planned = stop.get("arrival") 
                     arr_predicted = prognosis.get("arrival")
+                    
+                    # FALLBACK: If we are on an ARRIVAL board and arr_planned is null, 
+                    # but predicted exists, we try to use predicted if available.
+                    if board_type == "arrival" and not arr_planned:
+                        if arr_predicted:
+                            logger.warning(f"Missing planned arrival for {category} {number} at {station_name}. Using predicted as fallback.")
+                            arr_planned = arr_predicted
+                        else:
+                            # If both are missing, it might be a pass-through or start station error
+                            logger.debug(f"Missing planned AND predicted arrival for {category} {number} at {station_name}. Raw stop data: {stop}")
 
-                    # Platforms
+                    dep_effective = dep_predicted if dep_predicted else dep_planned
+                    arr_effective = arr_predicted if arr_predicted else arr_planned
+                    
+                    # Platform platform
                     plat_planned = stop.get("platform")
                     plat_predicted = prognosis.get("platform")
+                    if not plat_predicted: plat_predicted = plat_planned
                     
-                    # Status/Delays - Check multiple sources
+                    # Delay calculation
                     delay_min = 0
+                    arrival_delay_min = 0
                     
-                    # Method 1: Get from prognosis if available
-                    prognosis_delay = prognosis.get("delay")
-                    if prognosis_delay is not None:
-                        delay_min = prognosis_delay
-                    # Method 2: Get from stop if available
-                    elif stop.get("delay") is not None:
-                        delay_min = stop.get("delay")
-                    # Method 3: Calculate from timestamp difference if both times exist
-                    elif dep_planned and dep_predicted and dep_predicted != dep_planned:
+                    # Departure Delay
+                    if dep_planned and dep_predicted:
                         try:
                             from datetime import datetime as dt
                             planned_dt = dt.fromisoformat(dep_planned.replace('Z', '+00:00'))
                             predicted_dt = dt.fromisoformat(dep_predicted.replace('Z', '+00:00'))
-                            delay_seconds = (predicted_dt - planned_dt).total_seconds()
-                            delay_min = int(delay_seconds / 60)
-                        except:
-                            delay_min = 0
+                            delay_min = int((predicted_dt - planned_dt).total_seconds() / 60)
+                        except: pass
                     
-                    # Departure status
-                    status = "ON TIME"
-                    if delay_min > 0: status = "DELAYED"
-                    elif delay_min < 0: 
-                        status = "EARLY"
-                        delay_min = abs(delay_min)  # Keep delay as positive value
-                    if prognosis.get("status") == "cancelled": status = "CANCELLED"
-                    
-                    # Arrival status (if arrival times are available)
-                    status_arrival = "N/A"  # For departure boards, arrival at monitored station not usually available
-                    arrival_delay_min = 0
+                    # Arrival Delay (The user's priority!)
+                    status_arrival = "N/A"
                     if arr_planned and arr_predicted:
                         try:
                             from datetime import datetime as dt
-                            arr_planned_dt = dt.fromisoformat(arr_planned.replace('Z', '+00:00'))
-                            arr_predicted_dt = dt.fromisoformat(arr_predicted.replace('Z', '+00:00'))
-                            arrival_delay_sec = (arr_predicted_dt - arr_planned_dt).total_seconds()
-                            arrival_delay_min = int(arrival_delay_sec / 60)
+                            arr_p_dt = dt.fromisoformat(arr_planned.replace('Z', '+00:00'))
+                            arr_e_dt = dt.fromisoformat(arr_predicted.replace('Z', '+00:00'))
+                            arrival_delay_min = int((arr_e_dt - arr_p_dt).total_seconds() / 60)
                             
                             if arrival_delay_min > 0: status_arrival = "DELAYED"
-                            elif arrival_delay_min < 0: 
-                                status_arrival = "EARLY"
-                                arrival_delay_min = abs(arrival_delay_min)
-                            else:
-                                status_arrival = "ON TIME"
-                        except:
-                            status_arrival = "N/A"
-                            arrival_delay_min = 0
-                    
+                            elif arrival_delay_min < 0: status_arrival = "EARLY"
+                            else: status_arrival = "ON TIME"
+                        except: pass
+                    elif arr_predicted and board_type == "arrival":
+                        # If we only have predicted, we show it but keep status as UNKNOWN or N/A
+                        status_arrival = "TRACKING"
+                        
                     # Generate journey_id for deduplication (combine category+number+date+destination)
                     journey_date = dep_planned[:10] if dep_planned else datetime.utcnow().strftime("%Y-%m-%d")
                     destination_clean = connection.get("to", "UNKNOWN").replace(" ", "")[:20]
                     journey_id = f"{category}{number}_{journey_date}_{destination_clean}"
 
+                    # Status
+                    status = "ON TIME"
+                    if delay_min > 0: status = "DELAYED"
+                    elif delay_min < 0: status = "EARLY"
+                    if prognosis.get("status") == "cancelled": 
+                        status = "CANCELLED"
+                        status_arrival = "CANCELLED"
+
+                    # Row construction
                     row = {
                         "created_at": datetime.utcnow().isoformat(),
                         "station": station_name,
@@ -144,19 +347,19 @@ class SwissTrainProvider(TrainProvider):
                         "category": category,
                         "number": str(number),
                         "operator": connection.get("operator"),
-                        "partner_operator": "", # Not easily available
-                        "raw_departure_iso": dep_planned, # fallback to planned
+                        "partner_operator": "",
+                        "raw_departure_iso": dep_planned or arr_planned,
                         "planned_departure": dep_planned,
                         "predicted_departure": dep_effective,
-                        "delay_minutes": delay_min,
-                        "delay": delay_min,
+                        "delay_minutes": abs(delay_min),
+                        "delay": abs(delay_min),
                         "status": status,
                         "status_arrival": status_arrival,
                         "planned_platform": plat_planned,
                         "predicted_platform": plat_predicted,
                         "planned_arrival": arr_planned,
-                        "predicted_arrival": arr_predicted,
-                        "arrival_delay": arrival_delay_min,
+                        "predicted_arrival": arr_effective,
+                        "arrival_delay": abs(arrival_delay_min),
                         "is_cancelled": status == "CANCELLED",
                         "cancellation_reason": "",
                         "train_speed": "",
@@ -179,6 +382,11 @@ class SwissTrainProvider(TrainProvider):
         except requests.exceptions.RequestException as e:
             logger.error(f"Failed to fetch data from Swiss API: {e}")
             return []
+    
+    def get_connections(self, origin: str, destination: str, limit: int = 10) -> List[Dict[str, Any]]:
+        """Not implemented for station-based provider"""
+        return []
+
 
 class ViaggiatrenoTrainProvider(TrainProvider):
     # Unofficial API endpoints
@@ -501,6 +709,11 @@ class ViaggiatrenoTrainProvider(TrainProvider):
             return dt.isoformat()
         except:
             return datetime.utcnow().isoformat()
+    
+    def get_connections(self, origin: str, destination: str, limit: int = 10) -> List[Dict[str, Any]]:
+        """Not implemented for Italian provider yet"""
+        return []
+
 
 class TrainMonitor:
     def __init__(self, data_endpoint: str, provider: TrainProvider):
@@ -590,10 +803,13 @@ def main():
     # Provider selection
     provider_type = os.environ.get("TRAIN_PROVIDER", "swiss").lower()
     
-    # Check if user wants multi-station mode
+    # NEW: Route-based monitoring mode
+    route_mode = os.environ.get("ROUTE_MODE", "true").lower() == "true"
+    
+    # Legacy: Multi-station mode
     multi_station_mode = os.environ.get("MULTI_STATION", "false").lower() == "true"
     
-    # Single station from environment variable
+    # Single station from environment variable (legacy)
     env_station = os.environ.get("STATION_NAME")
     
     logger.info("=== Train Monitor Started ===")
@@ -603,56 +819,101 @@ def main():
     else:
         logger.info("DATA_ENDPOINT is configured.")
     
-    # Determine stations to monitor
-    stations_to_monitor = []
-    
-    if multi_station_mode:
-        # Load stations from config file
+    # Initialize provider based on mode
+    if route_mode and provider_type == "swiss":
+        provider = SwissConnectionsProvider()
+        logger.info("Using Swiss Connections Provider (Route-based monitoring)")
+        
+        # Load routes from config
         try:
-            with open('stations.json', 'r') as f:
+            with open('routes.json', 'r') as f:
                 config = json.load(f)
-                if provider_type == "italy":
-                    stations_to_monitor = config.get("italian_stations", [])
-                    logger.info(f"Multi-station mode: Monitoring {len(stations_to_monitor)} Italian stations")
-                else:
-                    stations_to_monitor = config.get("swiss_stations", [])
-                    logger.info(f"Multi-station mode: Monitoring {len(stations_to_monitor)} Swiss stations")
+                routes = config.get("swiss_routes", [])
+                logger.info(f"Loaded {len(routes)} Swiss routes")
         except FileNotFoundError:
-            logger.error("stations.json not found. Falling back to single station mode.")
-            multi_station_mode = False
+            logger.error("routes.json not found. Cannot run in route mode.")
+            return
         except json.JSONDecodeError as e:
-            logger.error(f"Error parsing stations.json: {e}. Falling back to single station mode.")
-            multi_station_mode = False
-    
-    # Single station mode (fallback or explicit)
-    if not multi_station_mode:
-        if provider_type == "italy":
-            station = env_station if env_station else "Roma Termini"
+            logger.error(f"Error parsing routes.json: {e}")
+            return
+        
+        # Monitor all routes
+        monitor = TrainMonitor(data_url, provider)
+        all_records = []
+        
+        for route in routes:
+            origin = route.get("from")
+            destination = route.get("to")
+            logger.info(f"Processing route: {origin} -> {destination}")
+            try:
+                connections = provider.get_connections(origin, destination, limit=4)
+                if connections:
+                    all_records.extend(connections)
+                    logger.info(f"Found {len(connections)} connections")
+            except Exception as e:
+                logger.error(f"Error processing route {origin}->{destination}: {e}")
+                continue
+        
+        if all_records:
+            logger.info(f"Total records: {len(all_records)}. Sending to endpoint...")
+            monitor._send_to_endpoint(all_records)
         else:
-            station = env_station if env_station else "Zurich HB"
-        stations_to_monitor = [station]
-        logger.info(f"Single station mode: {station}")
+            logger.info("No connection data found.")
     
-    # Initialize provider
-    if provider_type == "italy":
-        provider = ViaggiatrenoTrainProvider()
-        logger.info(f"Using Italian Train Provider (Viaggiatreno)")
     else:
-        provider = SwissTrainProvider()
-        logger.info(f"Using Swiss Train Provider (Opendata.ch)")
-    
-    # Monitor all stations
-    monitor = TrainMonitor(data_url, provider)
-    
-    for station in stations_to_monitor:
-        logger.info(f"Processing station: {station}")
-        try:
-            monitor.run(station)
-        except Exception as e:
-            logger.error(f"Error processing {station}: {e}")
-            continue
+        # Legacy station-based monitoring
+        logger.info("Using station-based monitoring (legacy mode)")
+        
+        stations_to_monitor = []
+        
+        if multi_station_mode:
+            # Load stations from config file
+            try:
+                with open('stations.json', 'r') as f:
+                    config = json.load(f)
+                    if provider_type == "italy":
+                        stations_to_monitor = config.get("italian_stations", [])
+                        logger.info(f"Multi-station mode: Monitoring {len(stations_to_monitor)} Italian stations")
+                    else:
+                        stations_to_monitor = config.get("swiss_stations", [])
+                        logger.info(f"Multi-station mode: Monitoring {len(stations_to_monitor)} Swiss stations")
+            except FileNotFoundError:
+                logger.error("stations.json not found. Falling back to single station mode.")
+                multi_station_mode = False
+            except json.JSONDecodeError as e:
+                logger.error(f"Error parsing stations.json: {e}. Falling back to single station mode.")
+                multi_station_mode = False
+        
+        # Single station mode (fallback or explicit)
+        if not multi_station_mode:
+            if provider_type == "italy":
+                station = env_station if env_station else "Roma Termini"
+            else:
+                station = env_station if env_station else "Zurich HB"
+            stations_to_monitor = [station]
+            logger.info(f"Single station mode: {station}")
+        
+        # Initialize provider
+        if provider_type == "italy":
+            provider = ViaggiatrenoTrainProvider()
+            logger.info(f"Using Italian Train Provider (Viaggiatreno)")
+        else:
+            provider = SwissTrainProvider()
+            logger.info(f"Using Swiss Train Provider (Opendata.ch)")
+        
+        # Monitor all stations
+        monitor = TrainMonitor(data_url, provider)
+        
+        for station in stations_to_monitor:
+            logger.info(f"Processing station: {station}")
+            try:
+                monitor.run(station)
+            except Exception as e:
+                logger.error(f"Error processing {station}: {e}")
+                continue
     
     logger.info("=== Train Monitor Finished ===")
 
 if __name__ == "__main__":
     main()
+

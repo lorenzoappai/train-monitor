@@ -18,7 +18,7 @@ function doPost(e) {
         "delay_minutes", "delay", "status", "status_arrival", "planned_platform", "predicted_platform", 
         "planned_arrival", "predicted_arrival", "arrival_delay", "is_cancelled", 
         "cancellation_reason", "train_speed", "journey_duration", "stops_count", 
-        "api_response_time", "journey_id", "record_id", "data_quality", "raw_json"
+        "api_response_time", "journey_id", "record_id", "data_quality", "board_type", "raw_json"
       ]);
     }
     
@@ -66,6 +66,7 @@ function doPost(e) {
           item.journey_id || "",
           item.record_id || "",
           item.data_quality || 0,
+          item.board_type || "",
           item.raw_json || ""
         ];
       });

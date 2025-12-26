@@ -42,12 +42,16 @@ class SwissTrainProvider(TrainProvider):
         session.mount('https://', adapter)
         return session
 
-    def get_departures(self, station_name: str, limit: int = 10) -> List[Dict[str, Any]]:
+    def get_departures(self, station_name: str, limit: int = 10, board_type: str = "departure") -> List[Dict[str, Any]]:
         url = f"{self.BASE_URL}/stationboard"
         params = {
             'station': station_name,
             'limit': limit
         }
+        
+        # Add type parameter for arrival boards
+        if board_type == "arrival":
+            params['type'] = 'arrival'
         
         try:
             logger.info(f"Fetching data from Swiss API for station: {station_name}")
@@ -162,6 +166,7 @@ class SwissTrainProvider(TrainProvider):
                         "journey_id": journey_id,
                         "record_id": f"{category}_{number}_{station_name}_{dep_planned}",
                         "data_quality": 100, # Placeholder
+                        "board_type": board_type.upper(),
                         "raw_json": json.dumps(connection)
                     }
                     departures.append(row)
@@ -217,7 +222,7 @@ class ViaggiatrenoTrainProvider(TrainProvider):
         session.mount('https://', adapter)
         return session
 
-    def get_departures(self, station_name: str, limit: int = 10) -> List[Dict[str, Any]]:
+    def get_departures(self, station_name: str, limit: int = 10, board_type: str = "departure") -> List[Dict[str, Any]]:
         # 1. Get Station ID
         try:
             station_id, found_name = self._get_station_id(station_name)
@@ -227,27 +232,27 @@ class ViaggiatrenoTrainProvider(TrainProvider):
             
             logger.info(f"Resolved '{station_name}' to '{found_name}' ({station_id})")
             
-            # 2. Get Departures List
-            raw_departures = self._fetch_departures_raw(station_id, found_name)
+            # 2. Get Board Data (Departures or Arrivals)
+            raw_data = self._fetch_board_raw(station_id, found_name, board_type)
             
             # 3. Enrich with details (this is the heavy part)
-            detailed_departures = []
+            detailed_data = []
             
             # Limit processing to avoid too many API calls
-            to_process = raw_departures[:limit]
-            logger.info(f"Processing {len(to_process)} departures for detailed metrics...")
+            to_process = raw_data[:limit]
+            logger.info(f"Processing {len(to_process)} {board_type}s for detailed metrics...")
 
             for item in to_process:
                 try:
-                    details = self._get_train_details(item, station_id)
-                    detailed_departures.append(details)
+                    details = self._get_train_details(item, station_id, board_type)
+                    detailed_data.append(details)
                     # Be nice to the API
                     time.sleep(0.1)
                 except Exception as e:
                     logger.error(f"Error processing train {item.get('numeroTreno')}: {e}")
                     continue
             
-            return detailed_departures
+            return detailed_data
 
         except Exception as e:
             logger.error(f"Error fetching Italian train data: {e}")
@@ -267,7 +272,7 @@ class ViaggiatrenoTrainProvider(TrainProvider):
             logger.error(f"Failed to lookup station ID for {station_name}: {e}")
         return None, None
 
-    def _fetch_departures_raw(self, station_id: str, station_name: str) -> List[Dict[str, Any]]:
+    def _fetch_board_raw(self, station_id: str, station_name: str, board_type: str = "departure") -> List[Dict[str, Any]]:
         # Apply offset to get server-compatible time
         ts_ms = int((datetime.utcnow().timestamp() * 1000) + self.time_offset_ms)
         
@@ -278,9 +283,17 @@ class ViaggiatrenoTrainProvider(TrainProvider):
             logger.warning(f"Detected year 2025, subtracting 1 year from timestamp for API compatibility")
             ts_ms -= 31536000000  # Subtract 365 days in milliseconds
         
-        url = f"{self.BASE_URL}/partenze/{station_id}/{ts_ms}"
+        # Choose endpoint based on board type
+        if board_type == "arrival":
+            endpoint = "arrivi"
+            board_label = "arrival"
+        else:
+            endpoint = "partenze"
+            board_label = "departure"
+            
+        url = f"{self.BASE_URL}/{endpoint}/{station_id}/{ts_ms}"
         try:
-            logger.info(f"Fetching departure board for {station_name} ({station_id})")
+            logger.info(f"Fetching {board_label} board for {station_name} ({station_id})")
             response = self.session.get(url, timeout=10)
             response.raise_for_status()
             data = response.json()
@@ -288,10 +301,10 @@ class ViaggiatrenoTrainProvider(TrainProvider):
                 return data
             return []
         except Exception as e:
-            logger.error(f"Failed to fetch departures board: {e}")
+            logger.error(f"Failed to fetch {board_label} board: {e}")
             return []
 
-    def _get_train_details(self, departure_item: Dict[str, Any], current_station_id: str) -> Dict[str, Any]:
+    def _get_train_details(self, departure_item: Dict[str, Any], current_station_id: str, board_type: str = "departure") -> Dict[str, Any]:
         """
         Fetches 'andamentoTreno' to get full details.
         """
@@ -427,6 +440,7 @@ class ViaggiatrenoTrainProvider(TrainProvider):
                 "journey_id": journey_id,
                 "record_id": f"IT_{train_number}_{details.get('stazioneCorrente', 'UNK')}_{dep_planned_str}",
                 "data_quality": 100,
+                "board_type": board_type.upper(),
                 "raw_json": json.dumps(details)
             }
             pass # Replacement end
@@ -474,6 +488,7 @@ class ViaggiatrenoTrainProvider(TrainProvider):
             "journey_id": f"{category}{number}_UNKNOWN",
             "record_id": f"IT_FB_{number}_{parsed_dep}",
             "data_quality": 50,
+            "board_type": "DEPARTURE",
             "raw_json": json.dumps(item)
         }
         return row
@@ -512,14 +527,28 @@ class TrainMonitor:
             logger.error("STATION_NAME is not set")
             return
 
-        departures = self.provider.get_departures(station_name)
+        all_records = []
         
-        if not departures:
-            logger.info("No departures found or API error occurred.")
+        # 1. Fetch Departures
+        logger.info(f"Fetching Departure board for {station_name}")
+        departures = self.provider.get_departures(station_name, board_type="departure")
+        if departures:
+            all_records.extend(departures)
+            logger.info(f"Found {len(departures)} departures.")
+        
+        # 2. Fetch Arrivals
+        logger.info(f"Fetching Arrival board for {station_name}")
+        arrivals = self.provider.get_departures(station_name, board_type="arrival")
+        if arrivals:
+            all_records.extend(arrivals)
+            logger.info(f"Found {len(arrivals)} arrivals.")
+        
+        if not all_records:
+            logger.info("No data found for either board or API error occurred.")
             return
 
-        logger.info(f"Found {len(departures)} departures. Sending to Data Endpoint...")
-        self._send_to_endpoint(departures)
+        logger.info(f"Total records found: {len(all_records)}. Sending to Data Endpoint...")
+        self._send_to_endpoint(all_records)
 
     def _send_to_endpoint(self, rows: List[Dict[str, Any]]):
         if not self.data_endpoint:

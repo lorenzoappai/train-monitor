@@ -1,7 +1,7 @@
 function doGet(e) {
   return ContentService.createTextOutput(JSON.stringify({
     "status": "online",
-    "message": "Train Monitor API is accessible. method=GET"
+    "message": "Italian Train Monitor API is accessible. method=GET"
   })).setMimeType(ContentService.MimeType.JSON);
 }
 
@@ -15,16 +15,8 @@ function doPost(e) {
         .setMimeType(ContentService.MimeType.JSON);
     }
     
-    // Determine sheet name based on operator
-    var sheetName = "Train Logs"; // Default fallback
-    if (data.length > 0) {
-      var operator = data[0].operator || "";
-      if (operator.toLowerCase().includes("sbb") || operator.toLowerCase().includes("swiss")) {
-        sheetName = "Swiss Trains";
-      } else if (operator.toLowerCase().includes("trenitalia")) {
-        sheetName = "Italian Trains";
-      }
-    }
+    // Always use "Italian Trains" sheet
+    var sheetName = "Italian Trains";
     
     var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(sheetName);
     if (!sheet) {

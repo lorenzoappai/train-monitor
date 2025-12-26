@@ -64,7 +64,7 @@ jobs:
           
       - name: Monitor Italian Trains (Station-based)
         env:
-          DATA_ENDPOINT: ${{ secrets.DATA_ENDPOINT }}
+          DATA_ENDPOINT: ${{ secrets.DATA_ENDPOINT_ITALIAN }}
           ROUTE_MODE: 'false'
           MULTI_STATION: 'true'
           TRAIN_PROVIDER: 'italy'

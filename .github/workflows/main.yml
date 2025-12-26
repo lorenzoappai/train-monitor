@@ -27,7 +27,7 @@ on:
     - cron: '*/15 * * * *'
 
 jobs:
-  run-monitor:
+  monitor-swiss:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
@@ -41,14 +41,32 @@ jobs:
         run: |
           pip install -r requirements.txt
           
-      - name: Run Monitor
+      - name: Monitor Swiss Trains (Route-based)
         env:
           DATA_ENDPOINT: ${{ secrets.DATA_ENDPOINT }}
-          # NEW: Route-based monitoring (enabled by default)
           ROUTE_MODE: 'true'
-          # Legacy: Multi-station mode (for backward compatibility)
-          MULTI_STATION: ${{ (inputs.mode == 'multi' || github.event_name == 'schedule') && 'true' || 'false' }}
-          STATION_NAME: ${{ inputs.station }}
-          # For manual runs, use input provider. For scheduled runs, use vars.TRAIN_PROVIDER or default to swiss
-          TRAIN_PROVIDER: ${{ inputs.provider != '' && inputs.provider || vars.TRAIN_PROVIDER || 'swiss' }}
+          TRAIN_PROVIDER: 'swiss'
         run: python main.py
+  
+  monitor-italian:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+          
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          
+      - name: Monitor Italian Trains (Station-based)
+        env:
+          DATA_ENDPOINT: ${{ secrets.DATA_ENDPOINT }}
+          ROUTE_MODE: 'false'
+          MULTI_STATION: 'true'
+          TRAIN_PROVIDER: 'italy'
+        run: python main.py
+

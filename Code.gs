@@ -15,10 +15,10 @@ function doPost(e) {
       sheet.appendRow([
         "created_at", "station", "train_name", "destination", "category", "number", 
         "operator", "partner_operator", "raw_departure_iso", "planned_departure", "predicted_departure", 
-        "delay_minutes", "delay", "status", "planned_platform", "predicted_platform", 
+        "delay_minutes", "delay", "status", "status_arrival", "planned_platform", "predicted_platform", 
         "planned_arrival", "predicted_arrival", "arrival_delay", "is_cancelled", 
         "cancellation_reason", "train_speed", "journey_duration", "stops_count", 
-        "api_response_time", "record_id", "data_quality", "raw_json"
+        "api_response_time", "journey_id", "record_id", "data_quality", "raw_json"
       ]);
     }
     
@@ -51,6 +51,7 @@ function doPost(e) {
           item.delay_minutes || 0,
           item.delay || 0,
           item.status || "",
+          item.status_arrival || "",
           item.planned_platform || "",
           item.predicted_platform || "",
           item.planned_arrival || "",
@@ -62,6 +63,7 @@ function doPost(e) {
           item.journey_duration || "",
           item.stops_count || 0,
           item.api_response_time || 0,
+          item.journey_id || "",
           item.record_id || "",
           item.data_quality || 0,
           item.raw_json || ""

@@ -98,12 +98,39 @@ class SwissTrainProvider(TrainProvider):
                         except:
                             delay_min = 0
                     
+                    # Departure status
                     status = "ON TIME"
                     if delay_min > 0: status = "DELAYED"
                     elif delay_min < 0: 
                         status = "EARLY"
                         delay_min = abs(delay_min)  # Keep delay as positive value
                     if prognosis.get("status") == "cancelled": status = "CANCELLED"
+                    
+                    # Arrival status (if arrival times are available)
+                    status_arrival = "N/A"  # For departure boards, arrival at monitored station not usually available
+                    arrival_delay_min = 0
+                    if arr_planned and arr_predicted:
+                        try:
+                            from datetime import datetime as dt
+                            arr_planned_dt = dt.fromisoformat(arr_planned.replace('Z', '+00:00'))
+                            arr_predicted_dt = dt.fromisoformat(arr_predicted.replace('Z', '+00:00'))
+                            arrival_delay_sec = (arr_predicted_dt - arr_planned_dt).total_seconds()
+                            arrival_delay_min = int(arrival_delay_sec / 60)
+                            
+                            if arrival_delay_min > 0: status_arrival = "DELAYED"
+                            elif arrival_delay_min < 0: 
+                                status_arrival = "EARLY"
+                                arrival_delay_min = abs(arrival_delay_min)
+                            else:
+                                status_arrival = "ON TIME"
+                        except:
+                            status_arrival = "N/A"
+                            arrival_delay_min = 0
+                    
+                    # Generate journey_id for deduplication (combine category+number+date+destination)
+                    journey_date = dep_planned[:10] if dep_planned else datetime.utcnow().strftime("%Y-%m-%d")
+                    destination_clean = connection.get("to", "UNKNOWN").replace(" ", "")[:20]
+                    journey_id = f"{category}{number}_{journey_date}_{destination_clean}"
 
                     row = {
                         "created_at": datetime.utcnow().isoformat(),
@@ -120,18 +147,20 @@ class SwissTrainProvider(TrainProvider):
                         "delay_minutes": delay_min,
                         "delay": delay_min,
                         "status": status,
+                        "status_arrival": status_arrival,
                         "planned_platform": plat_planned,
                         "predicted_platform": plat_predicted,
                         "planned_arrival": arr_planned,
                         "predicted_arrival": arr_predicted,
-                        "arrival_delay": 0, # Not provided for departure board
+                        "arrival_delay": arrival_delay_min,
                         "is_cancelled": status == "CANCELLED",
                         "cancellation_reason": "",
                         "train_speed": "",
                         "journey_duration": "",
                         "stops_count": len(connection.get("pass_list", [])),
                         "api_response_time": 0, # Could measure
-                        "record_id": f"{category}_{number}_{dep_planned}",
+                        "journey_id": journey_id,
+                        "record_id": f"{category}_{number}_{station_name}_{dep_planned}",
                         "data_quality": 100, # Placeholder
                         "raw_json": json.dumps(connection)
                     }
@@ -344,9 +373,25 @@ class ViaggiatrenoTrainProvider(TrainProvider):
             if max_delay > delay_minutes:
                  delay_minutes = max_delay # Use max recorded delay if higher?
 
+            # Departure status
             status = "ON TIME"
             if cancelled: status = "CANCELLED"
             elif delay_minutes > 5: status = "DELAYED"
+            elif delay_minutes < -5: status = "EARLY"
+            
+            # Arrival status
+            status_arrival = "N/A"
+            arrival_delay_min = 0
+            if arr_planned_ts and arr_effective_ts:
+                arrival_delay_min = round((arr_effective_ts - arr_planned_ts) / 60000.0)
+                if arrival_delay_min > 5: status_arrival = "DELAYED"
+                elif arrival_delay_min < -5: status_arrival = "EARLY"
+                else: status_arrival = "ON TIME"
+            
+            # Journey ID for deduplication
+            journey_date = dep_planned_str[:10] if dep_planned_str else datetime.utcnow().strftime("%Y-%m-%d")
+            destination_clean = details.get('destinazione', 'UNKNOWN').replace(" ", "")[:20]
+            journey_id = f"{train_type}{train_number}_{journey_date}_{destination_clean}"
             
             row = {
                 "created_at": datetime.utcnow().isoformat(),
@@ -364,13 +409,14 @@ class ViaggiatrenoTrainProvider(TrainProvider):
                 "delay_minutes": delay_minutes,
                 "delay": delay_minutes,
                 "status": status,
+                "status_arrival": status_arrival,
                 
                 "planned_platform": gate_planned,
                 "predicted_platform": gate_effective,
                 
                 "planned_arrival": arr_planned_str,
                 "predicted_arrival": arr_effective_str,
-                "arrival_delay": 0, # Specific to arrival station
+                "arrival_delay": arrival_delay_min,
                 
                 "is_cancelled": cancelled,
                 "cancellation_reason": "",
@@ -378,7 +424,8 @@ class ViaggiatrenoTrainProvider(TrainProvider):
                 "journey_duration": "", 
                 "stops_count": len(stops),
                 "api_response_time": 0,
-                "record_id": f"IT_{train_number}_{dep_planned_str}",
+                "journey_id": journey_id,
+                "record_id": f"IT_{train_number}_{details.get('stazioneCorrente', 'UNK')}_{dep_planned_str}",
                 "data_quality": 100,
                 "raw_json": json.dumps(details)
             }
@@ -412,6 +459,7 @@ class ViaggiatrenoTrainProvider(TrainProvider):
             "delay_minutes": 0,
             "delay": 0,
             "status": "UNKNOWN",
+            "status_arrival": "N/A",
             "planned_platform": item.get('binarioProgrammatoPartenzaDescrizione'),
             "predicted_platform": item.get('binarioEffettivoPartenzaDescrizione'),
             "planned_arrival": "",
@@ -423,6 +471,7 @@ class ViaggiatrenoTrainProvider(TrainProvider):
             "journey_duration": "",
             "stops_count": 0,
             "api_response_time": 0,
+            "journey_id": f"{category}{number}_UNKNOWN",
             "record_id": f"IT_FB_{number}_{parsed_dep}",
             "data_quality": 50,
             "raw_json": json.dumps(item)

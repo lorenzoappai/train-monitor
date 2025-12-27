@@ -6,7 +6,7 @@ on:
       debug_enabled:
         description: 'Run with debug logging'
         required: false
-        default: 'false'
+        default: false
         type: boolean
   schedule:
     - cron: '*/15 * * * *'

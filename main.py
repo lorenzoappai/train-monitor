@@ -110,6 +110,11 @@ class SwissConnectionsProvider(TrainProvider):
                             if train_category:
                                 break
                     
+                    if os.environ.get("DEBUG") == "true":
+                        logger.info(f"DEBUG {train_category} {train_number}:")
+                        logger.info(f"  Dep Planned: {dep_planned} | Actual: {dep_actual}")
+                        logger.info(f"  Arr Planned: {arr_planned} | Actual: {arr_actual}")
+
                     # Fallback to planned times if actual not available
                     if not dep_actual:
                         dep_actual = dep_planned

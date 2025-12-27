@@ -3,26 +3,11 @@ name: Monitor Trains
 on:
   workflow_dispatch:
     inputs:
-      mode:
-        description: 'Monitoring Mode'
-        required: true
-        default: 'multi'
-        type: choice
-        options:
-        - multi
-        - single
-      provider:
-        description: 'Train Provider'
-        required: true
-        default: 'swiss'
-        type: choice
-        options:
-        - swiss
-        - italy
-      station:
-        description: 'Station Name (for single mode)'
+      debug_enabled:
+        description: 'Run with debug logging'
         required: false
-        default: 'Zurich HB'
+        default: 'false'
+        type: boolean
   schedule:
     - cron: '*/15 * * * *'
 
@@ -46,6 +31,7 @@ jobs:
           DATA_ENDPOINT: ${{ secrets.DATA_ENDPOINT }}
           ROUTE_MODE: 'true'
           TRAIN_PROVIDER: 'swiss'
+          DEBUG: ${{ inputs.debug_enabled }}
         run: python main.py
   
   monitor-italian:
@@ -68,5 +54,6 @@ jobs:
           ROUTE_MODE: 'false'
           MULTI_STATION: 'true'
           TRAIN_PROVIDER: 'italy'
+          DEBUG: ${{ inputs.debug_enabled }}
         run: python main.py
 
